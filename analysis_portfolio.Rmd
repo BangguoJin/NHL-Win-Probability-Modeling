@@ -1,0 +1,186 @@
+---
+title: "NHL Win Probability Modeling (Portfolio Project)"
+output: github_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+options(repos = c(CRAN = "https://cran.r-project.org"))
+
+library(tidyverse)
+library(lmtest)
+library(sandwich)
+library(broom)
+```
+
+## 1) Load data
+
+This repo does **not** redistribute large/raw datasets.  
+To reproduce results, place `game_teams_stats.csv` in `data/` or run using the included sample.
+
+```{r}
+DATA_PATH_MAIN   <- "data/game_teams_stats.csv"
+DATA_PATH_SAMPLE <- "data/game_teams_stats_sample.csv"
+
+data_path <- if (file.exists(DATA_PATH_MAIN)) DATA_PATH_MAIN else DATA_PATH_SAMPLE
+games_raw <- read_csv(data_path, show_col_types = FALSE)
+
+glimpse(games_raw)
+```
+
+## 2) Clean + feature engineering (team-game → team vs opponent)
+
+Each NHL game appears twice (home and away). We reshape to wide format and then reconstruct
+a clean team-level dataset with opponent variables.
+
+```{r}
+games_clean <- games_raw %>%
+  filter(!is.na(goals), !is.na(shots), !is.na(pim)) %>%
+  distinct()
+
+# Ensure each game has exactly 2 rows (home + away)
+games_wide <- games_clean %>%
+  filter(HoA %in% c("home","away")) %>%
+  group_by(game_id) %>%
+  filter(n() == 2) %>%
+  ungroup() %>%
+  pivot_wider(
+    names_from = HoA,
+    values_from = c(team_id, won, settled_in, goals, shots, hits, pim,
+                    powerPlayOpportunities, powerPlayGoals,
+                    faceOffWinPercentage, giveaways, takeaways),
+    names_sep = "_"
+  )
+
+# Reconstruct team perspective rows
+games_home <- games_wide %>%
+  transmute(
+    game_id,
+    team_id = team_id_home,
+    home = 1L,
+    win = as.integer(won_home),
+    settled_in = settled_in_home,
+    goals = goals_home,
+    shots = shots_home,
+    hits = hits_home,
+    pim = pim_home,
+    powerPlayOpportunities = powerPlayOpportunities_home,
+    powerPlayGoals = powerPlayGoals_home,
+    faceOffWinPercentage = faceOffWinPercentage_home,
+    giveaways = giveaways_home,
+    takeaways = takeaways_home,
+    opp_goals = goals_away,
+    opp_shots = shots_away,
+    opp_pim = pim_away,
+    opp_pp_opps = powerPlayOpportunities_away,
+    opp_pp_goals = powerPlayGoals_away
+  )
+
+games_away <- games_wide %>%
+  transmute(
+    game_id,
+    team_id = team_id_away,
+    home = 0L,
+    win = as.integer(won_away),
+    settled_in = settled_in_away,
+    goals = goals_away,
+    shots = shots_away,
+    hits = hits_away,
+    pim = pim_away,
+    powerPlayOpportunities = powerPlayOpportunities_away,
+    powerPlayGoals = powerPlayGoals_away,
+    faceOffWinPercentage = faceOffWinPercentage_away,
+    giveaways = giveaways_away,
+    takeaways = takeaways_away,
+    opp_goals = goals_home,
+    opp_shots = shots_home,
+    opp_pim = pim_home,
+    opp_pp_opps = powerPlayOpportunities_home,
+    opp_pp_goals = powerPlayGoals_home
+  )
+
+games <- bind_rows(games_home, games_away) %>%
+  mutate(
+    gd = goals - opp_goals,
+    shots_for = shots,
+    shots_against = opp_shots,
+    net_pp = powerPlayOpportunities - opp_pp_opps,
+    pim_diff = pim - opp_pim
+  )
+
+summary(games$win)
+```
+
+## 3) Baseline logistic regression (win probability)
+
+```{r}
+model_baseline <- glm(
+  win ~ pim + gd + shots_for + shots_against + home,
+  data = games,
+  family = binomial(link = "logit")
+)
+
+# Robust (HC0) standard errors
+robust_test <- coeftest(model_baseline, vcov = vcovHC(model_baseline, type = "HC0"))
+robust_test
+```
+
+### Odds ratios table (portfolio-friendly)
+
+```{r}
+or_table <- tidy(model_baseline) %>%
+  mutate(
+    OR = exp(estimate),
+    OR_low = exp(estimate - 1.96 * std.error),
+    OR_high = exp(estimate + 1.96 * std.error)
+  )
+
+or_table
+```
+
+```{r}
+dir.create("outputs", showWarnings = FALSE)
+write_csv(or_table, "outputs/baseline_odds_ratios.csv")
+```
+
+## 4) Predicted win probability vs. penalty minutes (controls fixed)
+
+```{r}
+dir.create("figures", showWarnings = FALSE)
+
+pim_grid <- tibble(
+  pim = seq(0, 40, by = 1),
+  gd = 0,
+  shots_for = median(games$shots_for, na.rm = TRUE),
+  shots_against = median(games$shots_against, na.rm = TRUE),
+  home = 0L
+)
+
+pim_grid$pred_win_prob <- predict(model_baseline, newdata = pim_grid, type = "response")
+
+ggplot(pim_grid, aes(x = pim, y = pred_win_prob)) +
+  geom_line() +
+  labs(
+    title = "Predicted Win Probability vs. Penalty Minutes",
+    subtitle = "Controls fixed at: goal differential = 0, shots at median, away game",
+    x = "Penalty minutes (PIM)",
+    y = "Predicted P(win)"
+  )
+```
+
+```{r}
+ggsave("figures/pim_predicted_winprob.png", width = 8, height = 5, dpi = 200)
+```
+
+## 5) Optional: interaction (Home × PIM)
+
+```{r}
+model_home_int <- glm(
+  win ~ pim * home + gd + shots_for + shots_against,
+  data = games,
+  family = binomial(link = "logit")
+)
+
+coeftest(model_home_int, vcov = vcovHC(model_home_int, type = "HC0"))
+```
+
+
