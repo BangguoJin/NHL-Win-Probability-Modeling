@@ -58,7 +58,7 @@ This repository is a portfolio version of the project. It includes cleaned code,
 1. Open analysis_portfolio.Rmd in RStudio.
 2. Install packages (if needed):
    ```r
-   install.packages(c("tidyverse","broom","ggplot2","sandwich","lmtest"))
+   install.packages(c("tidyverse","broom",“readxl”,"gt","gridExtra","ggefects"))
    ```
 3. Update the dataset path in the script and run.
 
