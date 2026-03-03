@@ -17,7 +17,27 @@ The goal is to quantify how discipline (penalty minutes), offensive/defensive pe
 
 > **Data note:** This repo is designed as a **portfolio project** and does **not** redistribute any course-provided data files.  
 > To reproduce results, place your dataset locally (e.g., `data/game_teams_stats.csv`) and update the file path in the analysis script.
+## Key Figures
 
+### Distribution of team penalty minutes
+![Distribution of team penalty minutes](figures/pim_distribution.png)
+
+### Model-predicted win probability vs penalty minutes
+![Predicted win probability vs PIM](figures/predicted_win_probability_vs_pim.png)
+
+### Home vs away predicted win probability
+![Home vs away predicted win probability](figures/home_away_predicted_win_probability.png)
+
+## Repository Contents
+
+- `analysis_portfolio.Rmd` — main analysis code
+- `REPORT.md` — written project report
+- `data/` — sample data / data notes
+- `figures/` — exported figures used in the project
+
+## Notes
+
+This repository is a portfolio version of the project. It includes cleaned code, selected figures, and documentation suitable for public presentation.
 ## Methods
 - **Logistic regression (GLM, binomial):**  
   `glm(win ~ X, family = binomial(link = "logit"))`
