@@ -45,9 +45,7 @@ This repository is a portfolio version of the project. It includes cleaned code,
 - `data/` — sample data / data notes
 - `figures/` — selected figures for portfolio presentation
 
-## Notes
 
-This repository is a portfolio version of the project. It includes cleaned code, selected figures, and documentation suitable for public presentation.
 ## Methods
 - **Logistic regression (GLM, binomial):**  
   `glm(win ~ X, family = binomial(link = "logit"))`
