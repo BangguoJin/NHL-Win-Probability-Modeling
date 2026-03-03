@@ -38,12 +38,7 @@ The goal is to quantify how discipline (penalty minutes), offensive/defensive pe
 ## Notes
 
 This repository is a portfolio version of the project. It includes cleaned code, selected figures, and documentation suitable for public presentation.
-## Repository Contents
 
-- `analysis_portfolio.Rmd` — main analysis code
-- `REPORT.md` — project summary and written interpretation
-- `data/` — sample data / data notes
-- `figures/` — selected figures for portfolio presentation
 
 
 ## Methods
