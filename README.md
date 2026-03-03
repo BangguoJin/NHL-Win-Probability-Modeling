@@ -73,3 +73,6 @@ This repository is a portfolio version of the project. It includes cleaned code,
 - Interpreting odds ratios and uncertainty (CI/p-values)
 - Data cleaning, feature engineering, and visualization
 - Translating statistical output into clear business-style insights
+
+
+A longer written research paper is available upon request.
