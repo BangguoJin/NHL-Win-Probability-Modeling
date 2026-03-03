@@ -55,7 +55,7 @@ This repository is a portfolio version of the project. It includes cleaned code,
 - Some descriptive relationships (e.g., raw special-teams opportunity counts) can weaken after controlling for scoring-related variables—highlighting confounding.
 
 ## How to Run
-1. Open `nhl_win_probability_portfolio.Rmd` (or the main analysis file) in RStudio.
+1. Open analysis_portfolio.Rmd in RStudio.
 2. Install packages (if needed):
    ```r
    install.packages(c("tidyverse","broom","ggplot2","sandwich","lmtest"))
