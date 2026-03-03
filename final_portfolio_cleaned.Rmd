@@ -1,0 +1,470 @@
+---
+title: "NHL Win Probability Modeling"
+author: "Bangguo Jin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  github_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+
+library(tidyverse)
+library(broom)
+library(readxl)
+library(gt)
+library(gridExtra)
+library(ggeffects)
+```
+
+## Overview
+
+This cleaned version is designed for GitHub/portfolio use. It:
+
+- uses a repo-friendly data path search
+- keeps the author name as **Bangguo Jin**
+- saves selected figures to a `figures/` folder
+- keeps the original analysis logic while making the code easier to reuse
+
+```{r helpers}
+find_data_file <- function() {
+  candidates <- c(
+    "data/game_teams_stats.csv",
+    "game_teams_stats.csv",
+    "data/game_teams_stats_sample.csv",
+    "game_teams_stats_sample.csv",
+    "data/game_teams_stats.xlsx",
+    "game_teams_stats.xlsx"
+  )
+
+  hit <- candidates[file.exists(candidates)][1]
+  if (is.na(hit)) {
+    stop(
+      "No dataset found. Place one of these files in the project folder:\n",
+      "- data/game_teams_stats.csv\n",
+      "- game_teams_stats.csv\n",
+      "- data/game_teams_stats_sample.csv\n",
+      "- game_teams_stats_sample.csv\n",
+      "- data/game_teams_stats.xlsx\n",
+      "- game_teams_stats.xlsx"
+    )
+  }
+  hit
+}
+
+load_nhl_data <- function(path) {
+  if (grepl("\\.xlsx$", path, ignore.case = TRUE)) {
+    df <- read_excel(path, sheet = 1)
+    colnames(df) <- c(
+      "game_id", "team_id", "HoA", "won", "settled_in", "head_coach",
+      "goals", "shots", "hits", "pim", "powerPlayOpportunities",
+      "powerPlayGoals", "faceOffWinPercentage", "giveaways",
+      "takeaways", "blocked", "startRinkSide"
+    )
+  } else {
+    df <- read_csv(path, show_col_types = FALSE)
+  }
+
+  df %>%
+    mutate(
+      game_id = as.character(game_id),
+      team_id = as.numeric(team_id),
+      HoA = as.character(HoA),
+      won = as.logical(won),
+      goals = as.numeric(goals),
+      shots = as.numeric(shots),
+      pim = as.numeric(pim),
+      powerPlayOpportunities = as.numeric(powerPlayOpportunities),
+      powerPlayGoals = as.numeric(powerPlayGoals)
+    ) %>%
+    filter(
+      !is.na(team_id), !is.na(goals), !is.na(shots),
+      !is.na(pim), !is.na(won)
+    ) %>%
+    distinct(game_id, team_id, .keep_all = TRUE)
+}
+
+dir.create("figures", showWarnings = FALSE, recursive = TRUE)
+dir.create("outputs", showWarnings = FALSE, recursive = TRUE)
+
+data_path <- find_data_file()
+df <- load_nhl_data(data_path)
+
+cat("Loaded file:", data_path, "\n")
+cat("Rows after cleaning:", nrow(df), "\n")
+```
+
+## Question 1  
+**Does higher total penalty minutes (PIM) per game decrease win probability after controlling for goal differential and shots?**
+
+```{r q1-data}
+df_wide_q1 <- df %>%
+  select(game_id, team_id, HoA, won, goals, shots, pim) %>%
+  pivot_wider(
+    names_from = HoA,
+    values_from = c(team_id, won, goals, shots, pim),
+    names_glue = "{HoA}_{.value}"
+  ) %>%
+  filter(!is.na(home_team_id), !is.na(away_team_id))
+
+analysis_q1 <- bind_rows(
+  df_wide_q1 %>%
+    transmute(
+      game_id,
+      location = "home",
+      won = home_won,
+      goal_diff = home_goals - away_goals,
+      shots_self = home_shots,
+      shots_opp = away_shots,
+      pim_self = home_pim
+    ),
+  df_wide_q1 %>%
+    transmute(
+      game_id,
+      location = "away",
+      won = away_won,
+      goal_diff = away_goals - home_goals,
+      shots_self = away_shots,
+      shots_opp = home_shots,
+      pim_self = away_pim
+    )
+) %>%
+  filter(complete.cases(.))
+
+q1_model <- glm(
+  won ~ pim_self + goal_diff + shots_self + shots_opp,
+  data = analysis_q1,
+  family = binomial
+)
+
+q1_results <- tidy(q1_model, exponentiate = TRUE, conf.int = TRUE) %>%
+  mutate(across(where(is.numeric), ~ round(., 4)))
+
+q1_results %>%
+  select(
+    Term = term,
+    `Odds Ratio` = estimate,
+    `95% CI Lower` = conf.low,
+    `95% CI Upper` = conf.high,
+    `p-value` = p.value
+  ) %>%
+  gt() %>%
+  tab_header(title = "Question 1 Results")
+```
+
+```{r q1-figures}
+# Figure A1: distribution of PIM
+fig_a1 <- ggplot(analysis_q1, aes(x = pim_self)) +
+  geom_histogram(binwidth = 7, fill = "#E69F00", color = NA) +
+  labs(
+    title = "Figure A1. Distribution of team penalty minutes per game",
+    x = "Team penalty minutes in game (PIM)",
+    y = "Number of team-games"
+  ) +
+  theme_minimal(base_size = 16)
+
+# Figure 1A: observed win percentage by PIM
+fig_1a_data <- analysis_q1 %>%
+  group_by(pim_self) %>%
+  summarise(
+    win_pct = mean(as.numeric(won)),
+    .groups = "drop"
+  )
+
+fig_1a <- ggplot(fig_1a_data, aes(x = pim_self, y = win_pct)) +
+  geom_line(color = "#E69F00", linewidth = 1) +
+  geom_point(color = "#E69F00", size = 2.8) +
+  labs(
+    title = "Figure 1A. Win percentage by team penalty minutes",
+    x = "Team penalty minutes in game (PIM)",
+    y = "Observed win percentage"
+  ) +
+  ylim(0, 1) +
+  theme_minimal(base_size = 16)
+
+# Figure 1B: predicted probability vs PIM
+pred_q1 <- expand.grid(
+  pim_self = seq(0, 40, by = 1),
+  goal_diff = 0,
+  shots_self = mean(analysis_q1$shots_self, na.rm = TRUE),
+  shots_opp = mean(analysis_q1$shots_opp, na.rm = TRUE)
+)
+
+pred_q1$prob <- predict(q1_model, newdata = pred_q1, type = "response")
+
+fig_1b <- ggplot(pred_q1, aes(x = pim_self, y = prob)) +
+  geom_line(color = "#E69F00", linewidth = 1.2) +
+  labs(
+    title = "Figure 1B. Model-predicted win probability vs team PIM\n(Goal differential = 0, average shots)",
+    x = "Team penalty minutes in game (PIM)",
+    y = "Predicted probability of winning"
+  ) +
+  ylim(0, 1) +
+  theme_minimal(base_size = 16)
+
+fig_a1
+fig_1a
+fig_1b
+
+ggsave("figures/pim_distribution.png", fig_a1, width = 11, height = 8, dpi = 200)
+ggsave("figures/observed_win_percentage_by_pim.png", fig_1a, width = 11, height = 8, dpi = 200)
+ggsave("figures/predicted_win_probability_vs_pim.png", fig_1b, width = 11, height = 8, dpi = 200)
+```
+
+## Question 2  
+**Among teams that take more penalties than their opponent, does high power-play efficiency mitigate the negative effect?**
+
+```{r q2-data}
+q2_wide <- df %>%
+  select(game_id, HoA, team_id, won, pim, powerPlayOpportunities, powerPlayGoals, goals) %>%
+  pivot_wider(
+    names_from = HoA,
+    values_from = c(pim, powerPlayOpportunities, powerPlayGoals, won, goals, team_id),
+    names_glue = "{HoA}_{.value}"
+  ) %>%
+  filter(
+    !is.na(home_pim), !is.na(away_pim),
+    !is.na(home_powerPlayOpportunities), !is.na(away_powerPlayOpportunities)
+  )
+
+analysis_q2 <- bind_rows(
+  q2_wide %>%
+    transmute(
+      game_id,
+      location = "home",
+      won = home_won,
+      goal_diff = home_goals - away_goals,
+      pim_self = home_pim,
+      pim_opp = away_pim,
+      pp_opps_self = home_powerPlayOpportunities,
+      pp_goals_self = home_powerPlayGoals
+    ),
+  q2_wide %>%
+    transmute(
+      game_id,
+      location = "away",
+      won = away_won,
+      goal_diff = away_goals - home_goals,
+      pim_self = away_pim,
+      pim_opp = home_pim,
+      pp_opps_self = away_powerPlayOpportunities,
+      pp_goals_self = away_powerPlayGoals
+    )
+) %>%
+  filter(pp_opps_self > 0) %>%
+  mutate(
+    more_penalties = pim_self > pim_opp,
+    pp_conversion = pp_goals_self / pp_opps_self,
+    high_pp_conv = pp_conversion >= 0.25
+  ) %>%
+  filter(complete.cases(.))
+
+q2_subset <- analysis_q2 %>% filter(more_penalties)
+
+q2_model <- glm(
+  won ~ high_pp_conv + pim_self + goal_diff,
+  data = q2_subset,
+  family = binomial
+)
+
+q2_results <- tidy(q2_model, exponentiate = TRUE, conf.int = TRUE) %>%
+  mutate(across(where(is.numeric), ~ round(., 4)))
+
+q2_results %>%
+  select(
+    Term = term,
+    `Odds Ratio` = estimate,
+    `95% CI Lower` = conf.low,
+    `95% CI Upper` = conf.high,
+    `p-value` = p.value
+  ) %>%
+  gt() %>%
+  tab_header(title = "Question 2 Results")
+```
+
+```{r q2-figures}
+win_rate_summary <- q2_subset %>%
+  group_by(high_pp_conv) %>%
+  summarise(
+    win_rate = mean(won),
+    n_games = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    group = if_else(high_pp_conv, "High PP teams", "Other teams")
+  )
+
+fig_2a <- ggplot(win_rate_summary, aes(x = group, y = win_rate)) +
+  geom_col(fill = "#E69F00", alpha = 0.95) +
+  labs(
+    title = "Figure 2A. Win percentage when taking more PIM than opponent\nby team power-play efficiency group",
+    x = NULL,
+    y = "Win percentage"
+  ) +
+  ylim(0, 1) +
+  theme_minimal(base_size = 16)
+
+pred_q2 <- expand.grid(
+  pim_self = seq(0, 40, by = 1),
+  high_pp_conv = c(FALSE, TRUE),
+  goal_diff = 0
+)
+
+pred_q2$prob <- predict(q2_model, newdata = pred_q2, type = "response")
+
+fig_2b <- ggplot(pred_q2, aes(x = pim_self, y = prob, color = high_pp_conv)) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(
+    values = c("#E69F00", "#56B4E9"),
+    labels = c("Other teams", "High PP teams"),
+    name = NULL
+  ) +
+  labs(
+    title = "Figure 2B. Predicted win probability vs PIM\nwhen team has more PIM than opponent",
+    x = "Team penalty minutes in game (PIM)",
+    y = "Predicted probability of winning"
+  ) +
+  ylim(0, 1) +
+  theme_minimal(base_size = 16)
+
+fig_2a
+fig_2b
+
+ggsave("figures/high_pp_win_percentage_bar.png", fig_2a, width = 11, height = 8, dpi = 200)
+ggsave("figures/high_pp_predicted_win_probability.png", fig_2b, width = 11, height = 8, dpi = 200)
+```
+
+## Question 3  
+**Does the negative effect of PIM differ for home and away teams?**
+
+```{r q3-data}
+analysis_q3_base <- df %>%
+  select(game_id, HoA, team_id, won, pim, goals, shots) %>%
+  mutate(
+    HoA = factor(HoA, levels = c("away", "home")),
+    won = as.factor(won),
+    across(c(pim, goals, shots), as.numeric)
+  ) %>%
+  filter(complete.cases(.))
+
+q3_wide <- analysis_q3_base %>%
+  select(game_id, HoA, goals, shots, pim, won) %>%
+  pivot_wider(
+    names_from = HoA,
+    values_from = c(goals, shots, pim, won),
+    names_glue = "{HoA}_{.value}"
+  ) %>%
+  filter(!is.na(home_goals), !is.na(away_goals))
+
+analysis_q3 <- bind_rows(
+  q3_wide %>%
+    transmute(
+      game_id,
+      HoA = "home",
+      won = as.factor(home_won),
+      pim = home_pim,
+      shots = home_shots,
+      goal_diff = home_goals - away_goals
+    ),
+  q3_wide %>%
+    transmute(
+      game_id,
+      HoA = "away",
+      won = as.factor(away_won),
+      pim = away_pim,
+      shots = away_shots,
+      goal_diff = away_goals - home_goals
+    )
+) %>%
+  mutate(HoA = factor(HoA, levels = c("away", "home")))
+
+q3_model_main <- glm(
+  won ~ HoA + pim + goal_diff + shots,
+  data = analysis_q3,
+  family = binomial
+)
+
+q3_model_interaction <- glm(
+  won ~ HoA * pim + goal_diff + shots,
+  data = analysis_q3,
+  family = binomial
+)
+
+q3_results <- tidy(q3_model_interaction, exponentiate = TRUE, conf.int = TRUE) %>%
+  mutate(across(where(is.numeric), ~ round(., 4)))
+
+q3_results %>%
+  select(
+    Term = term,
+    `Odds Ratio` = estimate,
+    `95% CI Lower` = conf.low,
+    `95% CI Upper` = conf.high,
+    `p-value` = p.value
+  ) %>%
+  gt() %>%
+  tab_header(title = "Question 3 Results")
+```
+
+```{r q3-figures}
+# Figure 3A: observed home vs away win percentage by PIM
+fig_3a_data <- analysis_q3 %>%
+  group_by(HoA, pim) %>%
+  summarise(
+    win_pct = mean(as.numeric(won) - 1),
+    .groups = "drop"
+  )
+
+fig_3a <- ggplot(fig_3a_data, aes(x = pim, y = win_pct, color = HoA)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(
+    data = fig_3a_data %>% filter(HoA == "home"),
+    size = 2.5
+  ) +
+  scale_color_manual(
+    values = c("home" = "#E69F00", "away" = "#56B4E9"),
+    labels = c("Away teams", "Home teams"),
+    name = NULL
+  ) +
+  labs(
+    title = "Figure 3A. Win percentage vs PIM for home and away teams",
+    x = "Team penalty minutes in game (PIM)",
+    y = "Observed win percentage"
+  ) +
+  ylim(0, 1) +
+  theme_minimal(base_size = 16)
+
+# Figure 3B: model-predicted home vs away win probability
+pred_q3 <- ggpredict(q3_model_interaction, terms = c("pim [0:40 by=1]", "HoA")) %>%
+  as_tibble()
+
+fig_3b <- ggplot(pred_q3, aes(x = x, y = predicted, color = group)) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(
+    values = c("home" = "#E69F00", "away" = "#56B4E9"),
+    labels = c("Away teams", "Home teams"),
+    name = NULL
+  ) +
+  labs(
+    title = "Figure 3B. Predicted win probability vs PIM for home and away teams",
+    x = "Team penalty minutes in game (PIM)",
+    y = "Predicted probability of winning"
+  ) +
+  ylim(0, 1) +
+  theme_minimal(base_size = 16)
+
+fig_3a
+fig_3b
+
+ggsave("figures/home_away_observed_win_percentage.png", fig_3a, width = 11, height = 8, dpi = 200)
+ggsave("figures/home_away_predicted_win_probability.png", fig_3b, width = 11, height = 8, dpi = 200)
+```
+
+## Saved figure files
+
+```{r saved-files}
+list.files("figures")
+```
